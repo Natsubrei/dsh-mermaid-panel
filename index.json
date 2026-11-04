@@ -37,16 +37,16 @@
         ]
       },
       "dist-tags": {
-        "latest": "0.1.4"
+        "latest": "0.1.5"
       },
       "versions": [
         {
-          "version": "0.1.4",
-          "publishTimestamp": 1792732071,
+          "version": "0.1.5",
+          "publishTimestamp": 1793806115,
           "source": {
             "type": "git",
             "url": "https://github.com/Natsubrei/dsh-mermaid-panel",
-            "commit": "b877876eeea9aea6a70d6885776a7f2708a85720"
+            "commit": "22d9683031e902d02e16091fdc59023cb6f9b214"
           },
           "engines": {
             "dsh": "*"
