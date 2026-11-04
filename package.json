@@ -1,6 +1,6 @@
 {
   "name": "dsh-mermaid-panel",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "module",
   "description": "Mermaid diagrams in the DeepSeek Harness right sidebar. The page renders the open conversation; zoom and pan are in the full-screen view.",
   "keywords": [

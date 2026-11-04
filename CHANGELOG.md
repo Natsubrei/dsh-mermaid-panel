@@ -2,7 +2,7 @@
 
 User-visible changes. Dates are the version commits, in `+0800`.
 
-## Unreleased
+## 0.1.5 — 2026-11-04
 
 - An edit that keeps the same source length updates the card. A new diagram earlier in the conversation no longer remounts the later cards.
 - Diagram keywords track Mermaid 11.17.2. `zenuml` is no longer treated as a diagram. A bare `graph` or `flowchart` still needs a direction, and `info` is still ignored.
