@@ -1,0 +1,18 @@
+name: Feature request
+description: A change to the Sidebar page. Inline chat rendering is out of scope.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is missing
+      description: The page renders diagrams from the open conversation in the right Sidebar. It does not replace the chat code block.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you want instead
+    validations:
+      required: true

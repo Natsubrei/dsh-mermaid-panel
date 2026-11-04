@@ -1,0 +1,32 @@
+name: Bug report
+description: A diagram is missing, rejected, or drawn wrong.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: DeepSeek Harness version, and the plugin version from package.json or the install you used.
+      placeholder: dsh …, dsh-mermaid-panel 0.1.4
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: Empty page, failure notice, or a diagram that does not match the source. Say which.
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Diagram source
+      description: The Mermaid source from the chat code block, if you can share it. Mermaid's parser is what accepts or rejects it.
+      render: text
+  - type: textarea
+    id: expect
+    attributes:
+      label: What you expected
+    validations:
+      required: true

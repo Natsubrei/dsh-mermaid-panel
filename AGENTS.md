@@ -10,8 +10,9 @@ inside the messages instead; both install together.
 
 ## Map
 
-- `src/client.jsx` — the whole browser half: page type, DOM scan, cards, zoom/pan.
-  The source. `client.js` is its build output, never the place to edit.
+- `src/client.jsx` — the whole browser half: page type, DOM scan, fitted cards,
+  and the full-screen viewer. The source. `client.js` is its build output, never
+  the place to edit.
 - `client.js`, `client.mermaid.js` — artifacts, committed, so a Git install needs
   no build. `client.mermaid.js` is the 3.5 MB engine, requested on first diagram.
 - `build.mjs` — esbuild. Both module ids come from `package.json.name`.
@@ -23,9 +24,10 @@ inside the messages instead; both install together.
 ## Change something
 
 1. Edit `src/client.jsx`.
-2. `npm run build`, then `grep -m1 '  id: "' client.js`: it must equal the
+2. `pnpm run build`, then `grep -m1 '  id: "' client.js`: it must equal the
    `package.json` name, because that name is also the engine chunk's id
-   (`dsh-mermaid-panel/client.mermaid.js`) that `require.async` resolves.
+   (`dsh-mermaid-panel/client.mermaid.js`) that `require.async` resolves. The
+   lockfile is `pnpm-lock.yaml`; `pnpm install` first when `esbuild` is absent.
 3. `node --check client.js` — a bundle that does not parse is otherwise only
    visible in the GUI.
 4. Install this directory into a scratch profile
@@ -41,24 +43,30 @@ word, so a source that fails renders as the failure notice plus its source.
 The market entry pins a commit, so the tag, the tarball, and the index must all
 describe the same code.
 
-1. Bump `version` in `package.json`, `npm run build`, commit the bump with both
-   artifacts (`Release 0.2.0`).
-2. `git tag v0.2.0 && git push origin main --tags`.
+1. Bump `version` in `package.json`, `pnpm run build`, commit the bump with both
+   artifacts (`Release <version>`). `<version>` is that field after the bump.
+2. `git tag v<version> && git push origin main --tags`.
 3. Pack outside the tree under an unversioned name, then publish the release:
 
    ```bash
    npm pack --pack-destination /tmp/dsh-rel
-   cp /tmp/dsh-rel/dsh-mermaid-panel-0.2.0.tgz /tmp/dsh-rel/dsh-mermaid-panel.tgz
-   gh release create v0.2.0 /tmp/dsh-rel/dsh-mermaid-panel.tgz --title v0.2.0 --notes '…'
+   cp /tmp/dsh-rel/dsh-mermaid-panel-<version>.tgz /tmp/dsh-rel/dsh-mermaid-panel.tgz
+   gh release create v<version> /tmp/dsh-rel/dsh-mermaid-panel.tgz --title v<version> --notes '…'
    ```
 
-   `releases/latest/download/dsh-mermaid-panel.tgz` is a permanent URL the market
-   index and the awesome-list entry point at, so the asset keeps that name.
-4. `npm run market` on the tagged commit — it refuses when `client.js`'s module id
+   The asset name stays `dsh-mermaid-panel.tgz`, so
+   `releases/latest/download/dsh-mermaid-panel.tgz` does not change between
+   versions. `index.json` does not use that URL: its `source` is a git commit.
+   The awesome-dsh-plugin entry's `tarball` field is the URL that needs this
+   filename.
+4. `pnpm run market` on the tagged commit — it refuses when `client.js`'s module id
    disagrees with the package name — then commit `index.json` alone
-   (`Publish the 0.2.0 market index`) and push. It pins the tagged commit, never
+   (`Publish the <version> market index`) and push. It pins the tagged commit, never
    the index commit, so regenerate only when the artifacts move.
    `MARKET_COMMIT=<sha> MARKET_TIMESTAMP=<unix>` covers generating it first.
+   A correction to the generated title or description, with no artifact change,
+   uses those two variables copied from the current `index.json`, so the pinned
+   commit stays.
 5. `npm publish`. A new name answers `PUT 202` and serves npm's `0.0.0-stage`
    placeholder for a minute or two while the tarball is processed, so
    `npm view <name> version` can answer `0.0.0-stage` for a publish that worked:
@@ -67,7 +75,9 @@ describe the same code.
 
 ## Distribution
 
-- npm `dsh-mermaid-panel` — `install_bundle dsh-mermaid-panel@0.1.4`. This is the
+- npm `dsh-mermaid-panel`. Humans run `dsh plugin --profile web add dsh-mermaid-panel`
+  (README). In a session, `plugin_manager` `install_bundle` takes that package name;
+  a pin is `dsh-mermaid-panel@` plus the `version` field in `package.json`. This is the
   install path behind a slow GitHub connection, and awesome-dsh-plugin's
   `probe-npm.mjs` upgrades its card to a registry install once the package exists
   and its `repository` points back here.

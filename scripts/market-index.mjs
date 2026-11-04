@@ -16,8 +16,8 @@ import { readFile, writeFile } from 'node:fs/promises'
 const REPOSITORY = 'https://github.com/Natsubrei/dsh-mermaid-panel'
 const TITLE = { en: 'Mermaid diagrams', zh: 'Mermaid 图表' }
 const DESCRIPTION = {
-  en: 'A right-Sidebar page that renders a conversation\u2019s Mermaid diagrams, with zoom and pan in every card.',
-  zh: '在右侧栏渲染当前对话中的 Mermaid 图表，每张图都能在卡片内缩放与拖动。',
+  en: 'A right-Sidebar page that renders a conversation\u2019s Mermaid diagrams. The card is a fitted preview; zoom and pan are in the full-screen view.',
+  zh: '在右侧栏渲染当前对话中的 Mermaid 图表。卡片是整图预览；点击后全屏缩放与拖动。',
 }
 
 const root = new URL('..', import.meta.url)
