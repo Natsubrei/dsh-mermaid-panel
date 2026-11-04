@@ -57,6 +57,7 @@
   },
   "scripts": {
     "build": "node build.mjs",
+    "test": "node --test src/*.test.mjs",
     "market": "node scripts/market-index.mjs"
   },
   "devDependencies": {

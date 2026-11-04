@@ -10,9 +10,11 @@ inside the messages instead; both install together.
 
 ## Map
 
-- `src/client.jsx` — the whole browser half: page type, DOM scan, fitted cards,
-  and the full-screen viewer. The source. `client.js` is its build output, never
-  the place to edit.
+- `src/client.jsx` — the page: DOM scan, cards, and the full-screen viewer.
+  The source. `client.js` is its build output, never the place to edit.
+- `src/diagram-source.mjs` — which sources are diagrams, their keys, and whether
+  a scan changed. `src/viewport.mjs` — fit ratio, wheel factor, and zoom.
+  `src/render-policy.mjs` — the streaming keep rule and the render queue.
 - `client.js`, `client.mermaid.js` — artifacts, committed, so a Git install needs
   no build. `client.mermaid.js` is the 3.5 MB engine, requested on first diagram.
 - `build.mjs` — esbuild. Both module ids come from `package.json.name`.
@@ -23,7 +25,9 @@ inside the messages instead; both install together.
 
 ## Change something
 
-1. Edit `src/client.jsx`.
+1. Edit the module that owns the behavior: `src/client.jsx` for the page,
+   `src/diagram-source.mjs`, `src/viewport.mjs`, or `src/render-policy.mjs`
+   for the rules those tests call.
 2. `pnpm run build`, then `grep -m1 '  id: "' client.js`: it must equal the
    `package.json` name, because that name is also the engine chunk's id
    (`dsh-mermaid-panel/client.mermaid.js`) that `require.async` resolves. The
@@ -35,8 +39,9 @@ inside the messages instead; both install together.
    plugins reach the page at load, so a refresh applies them and a host restart
    does not.
 
-There is no test suite; step 4 is the test. Mermaid's own parser is the final
-word, so a source that fails renders as the failure notice plus its source.
+`pnpm test` covers the scan, the fit ratio, and the render queue. Step 4 is
+still the test of the page. Mermaid's own parser is the final word, so a
+source that fails renders as the failure notice plus its source.
 
 ## Release
 

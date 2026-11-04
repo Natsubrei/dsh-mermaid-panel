@@ -2,6 +2,14 @@
 
 User-visible changes. Dates are the version commits, in `+0800`.
 
+## Unreleased
+
+- An edit that keeps the same source length updates the card. A new diagram earlier in the conversation no longer remounts the later cards.
+- Diagram keywords track Mermaid 11.17.2. `zenuml` is no longer treated as a diagram. A bare `graph` or `flowchart` still needs a direction, and `info` is still ignored.
+- A diagram larger than the window fits inside the full-screen view. The wheel treats a line-mode notch as 16 pixels. A diagram that changes while the view is open refits, unless you have already zoomed or panned.
+- A failed render of an unchanged source shows the failure notice. A longer source that is still being streamed keeps the previous diagram.
+- Renders run one at a time, so one diagram cannot clear the engine state of another.
+
 ## 0.1.4 — 2026-10-23
 
 - The package name is `dsh-mermaid-panel`. `dsh-mermaid` belongs to [MrmoLabs/dsh-mermaid](https://github.com/MrmoLabs/dsh-mermaid), so the two could not be installed in one profile under one name.

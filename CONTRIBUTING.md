@@ -5,8 +5,8 @@ Changes to the page start in `src/client.jsx`. `client.js` and `client.mermaid.j
 ## Change the page
 
 1. `pnpm install`. The lockfile is `pnpm-lock.yaml`. `build.mjs` needs the `esbuild` and `mermaid` dev dependencies.
-2. Edit `src/client.jsx`.
-3. `pnpm run build`.
+2. Edit the module that owns the behavior. The page is `src/client.jsx`. The rules under test are `src/diagram-source.mjs`, `src/viewport.mjs`, and `src/render-policy.mjs`.
+3. `pnpm test`, then `pnpm run build`.
 4. The module id is done when `grep -m1 '  id: "' client.js` prints the `name` from `package.json`. That name is also the engine chunk id (`dsh-mermaid-panel/client.mermaid.js`) that `require.async` resolves.
 5. `node --check client.js`. A bundle that does not parse shows up only in the GUI.
 6. Install this directory into a scratch `web` profile and hard-refresh the Web GUI:
@@ -17,7 +17,7 @@ Changes to the page start in `src/client.jsx`. `client.js` and `client.mermaid.j
 
    Run it from the repository root. Client plugins reach the page at load, so a refresh applies them and a host restart does not.
 
-There is no test suite. Step 6 is the test: a conversation that contains a Mermaid code block shows a card, a click opens the full-screen view, and a source Mermaid rejects shows the failure notice plus the source. The chat's own code block stays in place.
+`pnpm test` covers the scan, the fit ratio, and the render queue. Step 6 is still the test of the page: a conversation that contains a Mermaid code block shows a card, a click opens the full-screen view, and a source Mermaid rejects shows the failure notice plus the source. The chat's own code block stays in place.
 
 Do not hand-edit `index.json`. `pnpm run market` rewrites it. Run that only when publishing, on the commit that already contains the built artifacts, then commit `index.json` alone.
 

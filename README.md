@@ -107,6 +107,9 @@ pnpm run build
 | --- | --- |
 | `index.js` | Host half. Rendering is browser-only, so it contributes nothing. |
 | `src/client.jsx` | The page type, its body, and the scan. Built into `client.js`. |
+| `src/diagram-source.mjs` | Which sources are diagrams, their keys, and whether a scan changed. |
+| `src/viewport.mjs` | Fit ratio, wheel factor, and zoom. |
+| `src/render-policy.mjs` | Streaming keep rule and the one-at-a-time render queue. |
 | `client.mermaid.js` | The Mermaid engine as a lazy loader chunk, requested on the first diagram. |
 | `cordis.patch.yml` | Inserts the plugin into the profile. |
 | `locale/en.json`, `locale/zh.json` | Plugin-inventory title and description. |

@@ -19,6 +19,9 @@
  */
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
+import { assignKeys, isDiagramSource, sameScan } from './diagram-source.mjs'
+import { createRenderQueue, keptDiagram } from './render-policy.mjs'
+import { MAX_SCALE, MIN_SCALE, VIEWER_BOTTOM, VIEWER_TOP, fitScale, wheelFactor, zoomAround } from './viewport.mjs'
 
 const TAB_ID = 'dsh-mermaid/mermaid'
 const TAB_KIND = 'mermaid'
@@ -216,49 +219,6 @@ const CSS = `
 .dsh-mermaid-viewer-canvas text { user-select: none; -webkit-user-select: none; }
 `
 
-/** Diagram-start keywords whose first line is unambiguous on its own. */
-const LOOSE_START = /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|quadrantChart|requirementDiagram|gitGraph|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment|mindmap|timeline|xychart-beta|block-beta|packet-beta|kanban|architecture-beta|sankey-beta|radar-beta|treemap-beta|zenuml)\b/
-
-/**
- * Flow directions are the part of `graph`/`flowchart` that makes the keyword a
- * diagram and not a variable name, so they are required.
- */
-const FLOW_START = /^(?:graph|flowchart)\s+(?:TB|TD|BT|RL|LR)\b/
-
-/**
- * The first line that carries the diagram declaration, skipping blank lines,
- * `%%` comments, and a leading YAML front-matter block.
- * @param source - the code block's text.
- * @returns the declaration line, or an empty string when there is none.
- */
-function declarationLine(source) {
-  const lines = source.split('\n')
-  let index = 0
-  if (lines[0]?.trim() === '---') {
-    const close = lines.findIndex((line, at) => at > 0 && line.trim() === '---')
-    if (close > 0) index = close + 1
-  }
-  for (; index < lines.length; index++) {
-    const line = lines[index].trim()
-    if (line === '' || line.startsWith('%%')) continue
-    return line
-  }
-  return ''
-}
-
-/**
- * Whether an untagged code block is worth handing to the engine. The chat's
- * code card carries no language attribute for unknown languages, so the
- * declaration line is the only signal available; the engine's own parser is
- * the final word when the render is attempted.
- * @param source - the code block's text.
- * @returns whether the source looks like a Mermaid diagram.
- */
-function isDiagramSource(source) {
-  const line = declarationLine(source)
-  return line !== '' && (FLOW_START.test(line) || LOOSE_START.test(line))
-}
-
 /**
  * Read the Mermaid sources out of the rendered conversation.
  * @returns the sources in document order, and whether a conversation is mounted.
@@ -266,19 +226,14 @@ function isDiagramSource(source) {
 function collectSources() {
   const scroll = document.querySelector(SCROLL_SELECTOR)
   if (scroll === null) return { blocks: [], mounted: false }
-  const blocks = []
+  const entries = []
   for (const card of scroll.querySelectorAll(CARD_SELECTOR)) {
     const source = card.querySelector(CONTENT_SELECTOR)?.querySelector('pre')?.textContent ?? ''
     if (!isDiagramSource(source)) continue
-    const owner = card.closest(OWNER_SELECTOR)?.getAttribute('data-chat-node-key') ?? String(blocks.length)
-    blocks.push({ key: `${owner}#${blocks.length}`, source })
+    const owner = card.closest(OWNER_SELECTOR)?.getAttribute('data-chat-node-key') ?? ''
+    entries.push({ owner, source })
   }
-  return { blocks, mounted: true }
-}
-
-/** Stable signature of a scan, so a no-op mutation does not re-render the page. */
-function signatureOf({ blocks, mounted }) {
-  return `${mounted ? 1 : 0}|${blocks.map(block => `${block.key}:${block.source.length}`).join(',')}`
+  return { blocks: assignKeys(entries), mounted: true }
 }
 
 /**
@@ -297,13 +252,9 @@ function useDiagramSources(active) {
   useEffect(() => {
     if (!active) return undefined
     let timer = 0
-    let signature = ''
     const scan = () => {
       const next = collectSources()
-      const nextSignature = signatureOf(next)
-      if (nextSignature === signature) return
-      signature = nextSignature
-      setState(next)
+      setState(prev => (sameScan(prev, next) ? prev : next))
     }
     const observer = new MutationObserver(() => {
       window.clearTimeout(timer)
@@ -330,27 +281,31 @@ function isDark() {
 }
 
 let renderSequence = 0
+const enqueueRender = createRenderQueue()
 
 /**
  * Render one diagram under the active palette. The strict security level is
  * the documented setting for source the model produced: mermaid sanitizes its
- * own output and refuses interactive handlers.
+ * own output and refuses interactive handlers. Calls run one at a time: the
+ * engine clears its shared diagram state on every render.
  * @param mermaid - the engine module.
  * @param source - the diagram's text.
  * @param dark - whether the page is in the dark palette.
  * @returns the rendered SVG markup.
  */
-async function renderSvg(mermaid, source, dark) {
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'strict',
-    suppressErrorRendering: true,
-    theme: dark ? 'dark' : 'default',
-    fontFamily: getComputedStyle(document.body).fontFamily,
+function renderSvg(mermaid, source, dark) {
+  return enqueueRender(async () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      suppressErrorRendering: true,
+      theme: dark ? 'dark' : 'default',
+      fontFamily: getComputedStyle(document.body).fontFamily,
+    })
+    renderSequence += 1
+    const { svg } = await mermaid.render(`dsh-mermaid-${renderSequence}`, source)
+    return svg
   })
-  renderSequence += 1
-  const { svg } = await mermaid.render(`dsh-mermaid-${renderSequence}`, source)
-  return svg
 }
 
 function copyText(text) {
@@ -381,31 +336,6 @@ function legacyCopy(text) {
   return ok
 }
 
-const MIN_SCALE = 0.2
-const MAX_SCALE = 12
-const VIEWER_PAD = 32
-const VIEWER_TOP = 52
-const VIEWER_BOTTOM = 24
-
-/**
- * Multiplicative zoom that keeps one screen point fixed. The transform is
- * `translate(x, y) scale(k)` on a top-left origin, so the content point under
- * (x, y) keeps its place exactly when the offset is scaled by the same ratio.
- * @param view - the current scale and offset.
- * @param factor - the multiplier to apply.
- * @param x - the fixed point's horizontal position in the viewport.
- * @param y - the fixed point's vertical position in the viewport.
- * @param min - the smallest allowed scale.
- * @param max - the largest allowed scale.
- * @returns the next view, or the current one when the scale is already at a limit.
- */
-function zoomAround(view, factor, x, y, min, max) {
-  const scale = Math.min(max, Math.max(min, view.scale * factor))
-  if (scale === view.scale) return view
-  const ratio = scale / view.scale
-  return { scale, x: x - (x - view.x) * ratio, y: y - (y - view.y) * ratio }
-}
-
 /**
  * Wheel zoom over one element. The listener is registered by hand because
  * React attaches wheel handlers as passive, where `preventDefault` does
@@ -422,8 +352,7 @@ function useWheelZoom(ref, onZoom) {
       const box = element.getBoundingClientRect()
       // Trackpads and mice differ by two orders of magnitude in deltaY; the
       // exponential keeps one notch of either a similar change in scale.
-      const factor = Math.exp(-event.deltaY * 0.0016)
-      onZoom(Math.min(2, Math.max(0.5, factor)), event.clientX - box.left, event.clientY - box.top)
+      onZoom(wheelFactor(event.deltaY, event.deltaMode, box.height), event.clientX - box.left, event.clientY - box.top)
     }
     element.addEventListener('wheel', onWheel, { passive: false })
     return () => { element.removeEventListener('wheel', onWheel) }
@@ -496,6 +425,8 @@ function DiagramViewer({ svg, t, onClose }) {
   const stageRef = useRef(null)
   const canvasRef = useRef(null)
   const closeRef = useRef(null)
+  const fitted = useRef(1)
+  const userAdjusted = useRef(false)
   const [view, setView] = useState({ scale: 1, x: 0, y: 0 })
 
   const fit = useCallback(() => {
@@ -508,9 +439,10 @@ function DiagramViewer({ svg, t, onClose }) {
     inner.setAttribute('width', String(size.width))
     inner.setAttribute('height', String(size.height))
     const box = stage.getBoundingClientRect()
-    const width = Math.max(80, box.width - VIEWER_PAD * 2)
+    const scale = fitScale(box.width, box.height, size.width, size.height)
     const height = Math.max(80, box.height - VIEWER_TOP - VIEWER_BOTTOM)
-    const scale = Math.max(MIN_SCALE, Math.min(1, width / size.width, height / size.height))
+    fitted.current = scale
+    userAdjusted.current = false
     setView({
       scale,
       x: (box.width - size.width * scale) / 2,
@@ -519,7 +451,8 @@ function DiagramViewer({ svg, t, onClose }) {
   }, [])
 
   const zoomAt = useCallback((factor, x, y) => {
-    setView(current => zoomAround(current, factor, x, y, MIN_SCALE, MAX_SCALE))
+    userAdjusted.current = true
+    setView(current => zoomAround(current, factor, x, y, Math.min(MIN_SCALE, fitted.current), MAX_SCALE))
   }, [])
 
   const zoomFromCenter = useCallback((factor) => {
@@ -529,11 +462,25 @@ function DiagramViewer({ svg, t, onClose }) {
     zoomAt(factor, box.width / 2, box.height / 2)
   }, [zoomAt])
 
-  useEffect(() => { fit() }, [fit])
+  useEffect(() => {
+    if (!userAdjusted.current) fit()
+  }, [fit, svg])
+
+  useEffect(() => {
+    const stage = stageRef.current
+    if (stage === null || typeof ResizeObserver !== 'function') return undefined
+    const observer = new ResizeObserver(() => {
+      if (userAdjusted.current) return
+      fit()
+    })
+    observer.observe(stage)
+    return () => { observer.disconnect() }
+  }, [fit])
 
   useWheelZoom(rootRef, zoomAt)
 
   const { dragging, handlers } = useDragPan((dx, dy) => {
+    userAdjusted.current = true
     setView(current => ({ scale: current.scale, x: current.x + dx, y: current.y + dy }))
   })
 
@@ -656,7 +603,7 @@ function DiagramCard({ source, loadMermaid, t }) {
         // A cancelled effect never reports; a streaming extension keeps the
         // diagram it grew from, and anything else drops it for the notice.
         if (cancelled) return
-        setDrawn(previous => (previous !== undefined && source.startsWith(previous.source) ? previous : undefined))
+        setDrawn(previous => keptDiagram(previous, source))
         setFailed(true)
       }
     })()

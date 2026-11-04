@@ -30,6 +30,89 @@ __export(client_exports, {
 module.exports = __toCommonJS(client_exports);
 var import_react = require("react");
 var import_react_dom = require("react-dom");
+
+// src/diagram-source.mjs
+var LOOSE_START = /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|quadrantChart|requirement(?:Diagram)?|gitGraph|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment|mindmap|timeline|xychart(?:-beta)?|block(?:-beta)?|packet(?:-beta)?|kanban|architecture(?:-beta)?|sankey(?:-beta)?|radar-beta|treemap(?:-beta)?|flowchart-elk|swimlane-beta|wardley-beta|ishikawa(?:-beta)?|venn-beta|cynefin-beta|railroad(?:-ebnf|-abnf|-peg)?-beta)\b/;
+var FLOW_START = /^(?:graph|flowchart)\s+(?:TB|TD|BT|RL|LR)\b/;
+function declarationLine(source) {
+  const lines = source.split("\n");
+  let index = 0;
+  if (lines[0]?.trim() === "---") {
+    const close = lines.findIndex((line, at) => at > 0 && line.trim() === "---");
+    if (close > 0) index = close + 1;
+  }
+  for (; index < lines.length; index++) {
+    const line = lines[index].trim();
+    if (line === "" || line.startsWith("%%")) continue;
+    return line;
+  }
+  return "";
+}
+function isDiagramSource(source) {
+  const line = declarationLine(source);
+  return line !== "" && (FLOW_START.test(line) || LOOSE_START.test(line));
+}
+function assignKeys(entries) {
+  const seen = /* @__PURE__ */ new Map();
+  return entries.map((entry) => {
+    const owner = entry.owner ?? "";
+    const index = seen.get(owner) ?? 0;
+    seen.set(owner, index + 1);
+    return { key: `${owner}#${index}`, source: entry.source };
+  });
+}
+function sameScan(prev, next) {
+  if (prev.mounted !== next.mounted || prev.blocks.length !== next.blocks.length) return false;
+  for (let i = 0; i < prev.blocks.length; i++) {
+    if (prev.blocks[i].key !== next.blocks[i].key) return false;
+    if (prev.blocks[i].source !== next.blocks[i].source) return false;
+  }
+  return true;
+}
+
+// src/render-policy.mjs
+function keptDiagram(previous, source) {
+  if (previous === void 0) return void 0;
+  if (source.startsWith(previous.source) && source.length > previous.source.length) return previous;
+  return void 0;
+}
+function createRenderQueue() {
+  let tail = Promise.resolve();
+  return function enqueue(job) {
+    const run = tail.then(job);
+    tail = run.then(() => {
+    }, () => {
+    });
+    return run;
+  };
+}
+
+// src/viewport.mjs
+var MIN_SCALE = 0.2;
+var MAX_SCALE = 12;
+var VIEWER_PAD = 32;
+var VIEWER_TOP = 52;
+var VIEWER_BOTTOM = 24;
+var LINE_PX = 16;
+function fitScale(viewWidth, viewHeight, svgWidth, svgHeight) {
+  const width = Math.max(80, viewWidth - VIEWER_PAD * 2);
+  const height = Math.max(80, viewHeight - VIEWER_TOP - VIEWER_BOTTOM);
+  if (!(svgWidth > 0) || !(svgHeight > 0)) return 1;
+  return Math.min(1, width / svgWidth, height / svgHeight);
+}
+function wheelFactor(deltaY, deltaMode = 0, viewportHeight = 0) {
+  const pixels = deltaMode === 1 ? deltaY * LINE_PX : deltaMode === 2 ? deltaY * viewportHeight : deltaY;
+  const factor = Math.exp(-pixels * 16e-4);
+  return Math.min(2, Math.max(0.5, factor));
+}
+function zoomAround(view, factor, x, y, min, max) {
+  const scale = Math.min(max, Math.max(min, view.scale * factor));
+  if (scale === view.scale) return view;
+  const ratio = scale / view.scale;
+  return { scale, x: x - (x - view.x) * ratio, y: y - (y - view.y) * ratio };
+}
+
+// src/client.jsx
 var import_jsx_runtime = require("react/jsx-runtime");
 var TAB_ID = "dsh-mermaid/mermaid";
 var TAB_KIND = "mermaid";
@@ -220,53 +303,26 @@ var CSS = `
 .dsh-mermaid-viewer-canvas svg { display: block; max-width: none !important; height: auto; }
 .dsh-mermaid-viewer-canvas text { user-select: none; -webkit-user-select: none; }
 `;
-var LOOSE_START = /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|quadrantChart|requirementDiagram|gitGraph|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment|mindmap|timeline|xychart-beta|block-beta|packet-beta|kanban|architecture-beta|sankey-beta|radar-beta|treemap-beta|zenuml)\b/;
-var FLOW_START = /^(?:graph|flowchart)\s+(?:TB|TD|BT|RL|LR)\b/;
-function declarationLine(source) {
-  const lines = source.split("\n");
-  let index = 0;
-  if (lines[0]?.trim() === "---") {
-    const close = lines.findIndex((line, at) => at > 0 && line.trim() === "---");
-    if (close > 0) index = close + 1;
-  }
-  for (; index < lines.length; index++) {
-    const line = lines[index].trim();
-    if (line === "" || line.startsWith("%%")) continue;
-    return line;
-  }
-  return "";
-}
-function isDiagramSource(source) {
-  const line = declarationLine(source);
-  return line !== "" && (FLOW_START.test(line) || LOOSE_START.test(line));
-}
 function collectSources() {
   const scroll = document.querySelector(SCROLL_SELECTOR);
   if (scroll === null) return { blocks: [], mounted: false };
-  const blocks = [];
+  const entries = [];
   for (const card of scroll.querySelectorAll(CARD_SELECTOR)) {
     const source = card.querySelector(CONTENT_SELECTOR)?.querySelector("pre")?.textContent ?? "";
     if (!isDiagramSource(source)) continue;
-    const owner = card.closest(OWNER_SELECTOR)?.getAttribute("data-chat-node-key") ?? String(blocks.length);
-    blocks.push({ key: `${owner}#${blocks.length}`, source });
+    const owner = card.closest(OWNER_SELECTOR)?.getAttribute("data-chat-node-key") ?? "";
+    entries.push({ owner, source });
   }
-  return { blocks, mounted: true };
-}
-function signatureOf({ blocks, mounted }) {
-  return `${mounted ? 1 : 0}|${blocks.map((block) => `${block.key}:${block.source.length}`).join(",")}`;
+  return { blocks: assignKeys(entries), mounted: true };
 }
 function useDiagramSources(active) {
   const [state, setState] = (0, import_react.useState)({ blocks: [], mounted: false });
   (0, import_react.useEffect)(() => {
     if (!active) return void 0;
     let timer = 0;
-    let signature = "";
     const scan = () => {
       const next = collectSources();
-      const nextSignature = signatureOf(next);
-      if (nextSignature === signature) return;
-      signature = nextSignature;
-      setState(next);
+      setState((prev) => sameScan(prev, next) ? prev : next);
     };
     const observer = new MutationObserver(() => {
       window.clearTimeout(timer);
@@ -292,17 +348,20 @@ function isDark() {
   return document.body.hasAttribute(DARK_ATTRIBUTE);
 }
 var renderSequence = 0;
-async function renderSvg(mermaid, source, dark) {
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: "strict",
-    suppressErrorRendering: true,
-    theme: dark ? "dark" : "default",
-    fontFamily: getComputedStyle(document.body).fontFamily
+var enqueueRender = createRenderQueue();
+function renderSvg(mermaid, source, dark) {
+  return enqueueRender(async () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      suppressErrorRendering: true,
+      theme: dark ? "dark" : "default",
+      fontFamily: getComputedStyle(document.body).fontFamily
+    });
+    renderSequence += 1;
+    const { svg } = await mermaid.render(`dsh-mermaid-${renderSequence}`, source);
+    return svg;
   });
-  renderSequence += 1;
-  const { svg } = await mermaid.render(`dsh-mermaid-${renderSequence}`, source);
-  return svg;
 }
 function copyText(text) {
   const clipboard = navigator.clipboard;
@@ -328,17 +387,6 @@ function legacyCopy(text) {
   area.remove();
   return ok;
 }
-var MIN_SCALE = 0.2;
-var MAX_SCALE = 12;
-var VIEWER_PAD = 32;
-var VIEWER_TOP = 52;
-var VIEWER_BOTTOM = 24;
-function zoomAround(view, factor, x, y, min, max) {
-  const scale = Math.min(max, Math.max(min, view.scale * factor));
-  if (scale === view.scale) return view;
-  const ratio = scale / view.scale;
-  return { scale, x: x - (x - view.x) * ratio, y: y - (y - view.y) * ratio };
-}
 function useWheelZoom(ref, onZoom) {
   (0, import_react.useEffect)(() => {
     const element = ref.current;
@@ -346,8 +394,7 @@ function useWheelZoom(ref, onZoom) {
     const onWheel = (event) => {
       event.preventDefault();
       const box = element.getBoundingClientRect();
-      const factor = Math.exp(-event.deltaY * 16e-4);
-      onZoom(Math.min(2, Math.max(0.5, factor)), event.clientX - box.left, event.clientY - box.top);
+      onZoom(wheelFactor(event.deltaY, event.deltaMode, box.height), event.clientX - box.left, event.clientY - box.top);
     };
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => {
@@ -396,6 +443,8 @@ function DiagramViewer({ svg, t, onClose }) {
   const stageRef = (0, import_react.useRef)(null);
   const canvasRef = (0, import_react.useRef)(null);
   const closeRef = (0, import_react.useRef)(null);
+  const fitted = (0, import_react.useRef)(1);
+  const userAdjusted = (0, import_react.useRef)(false);
   const [view, setView] = (0, import_react.useState)({ scale: 1, x: 0, y: 0 });
   const fit = (0, import_react.useCallback)(() => {
     const stage = stageRef.current;
@@ -407,9 +456,10 @@ function DiagramViewer({ svg, t, onClose }) {
     inner.setAttribute("width", String(size.width));
     inner.setAttribute("height", String(size.height));
     const box = stage.getBoundingClientRect();
-    const width = Math.max(80, box.width - VIEWER_PAD * 2);
+    const scale = fitScale(box.width, box.height, size.width, size.height);
     const height = Math.max(80, box.height - VIEWER_TOP - VIEWER_BOTTOM);
-    const scale = Math.max(MIN_SCALE, Math.min(1, width / size.width, height / size.height));
+    fitted.current = scale;
+    userAdjusted.current = false;
     setView({
       scale,
       x: (box.width - size.width * scale) / 2,
@@ -417,7 +467,8 @@ function DiagramViewer({ svg, t, onClose }) {
     });
   }, []);
   const zoomAt = (0, import_react.useCallback)((factor, x, y) => {
-    setView((current) => zoomAround(current, factor, x, y, MIN_SCALE, MAX_SCALE));
+    userAdjusted.current = true;
+    setView((current) => zoomAround(current, factor, x, y, Math.min(MIN_SCALE, fitted.current), MAX_SCALE));
   }, []);
   const zoomFromCenter = (0, import_react.useCallback)((factor) => {
     const stage = stageRef.current;
@@ -426,10 +477,23 @@ function DiagramViewer({ svg, t, onClose }) {
     zoomAt(factor, box.width / 2, box.height / 2);
   }, [zoomAt]);
   (0, import_react.useEffect)(() => {
-    fit();
+    if (!userAdjusted.current) fit();
+  }, [fit, svg]);
+  (0, import_react.useEffect)(() => {
+    const stage = stageRef.current;
+    if (stage === null || typeof ResizeObserver !== "function") return void 0;
+    const observer = new ResizeObserver(() => {
+      if (userAdjusted.current) return;
+      fit();
+    });
+    observer.observe(stage);
+    return () => {
+      observer.disconnect();
+    };
   }, [fit]);
   useWheelZoom(rootRef, zoomAt);
   const { dragging, handlers } = useDragPan((dx, dy) => {
+    userAdjusted.current = true;
     setView((current) => ({ scale: current.scale, x: current.x + dx, y: current.y + dy }));
   });
   (0, import_react.useEffect)(() => {
@@ -542,7 +606,7 @@ function DiagramCard({ source, loadMermaid, t }) {
         setFailed(false);
       } catch {
         if (cancelled) return;
-        setDrawn((previous) => previous !== void 0 && source.startsWith(previous.source) ? previous : void 0);
+        setDrawn((previous) => keptDiagram(previous, source));
         setFailed(true);
       }
     })();
