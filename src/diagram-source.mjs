@@ -12,17 +12,31 @@ const LOOSE_START = /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2
  */
 const FLOW_START = /^(?:graph|flowchart)\s+(?:TB|TD|BT|RL|LR)\b/
 
+function lineAt(source, start) {
+  const end = source.indexOf('\n', start)
+  if (end === -1) return { text: source.slice(start), next: source.length }
+  return { text: source.slice(start, end), next: end + 1 }
+}
+
 function declarationLine(source) {
-  const lines = source.split('\n')
-  let index = 0
-  if (lines[0]?.trim() === '---') {
-    const close = lines.findIndex((line, at) => at > 0 && line.trim() === '---')
-    if (close > 0) index = close + 1
+  let start = 0
+  const first = lineAt(source, 0)
+  if (first.text.trim() === '---') {
+    let at = first.next
+    while (at < source.length) {
+      const line = lineAt(source, at)
+      if (line.text.trim() === '---') {
+        start = line.next
+        break
+      }
+      at = line.next
+    }
   }
-  for (; index < lines.length; index++) {
-    const line = lines[index].trim()
-    if (line === '' || line.startsWith('%%')) continue
-    return line
+  while (start < source.length) {
+    const line = lineAt(source, start)
+    const text = line.text.trim()
+    if (text !== '' && !text.startsWith('%%')) return text
+    start = line.next
   }
   return ''
 }

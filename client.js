@@ -34,17 +34,30 @@ var import_react_dom = require("react-dom");
 // src/diagram-source.mjs
 var LOOSE_START = /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|quadrantChart|requirement(?:Diagram)?|gitGraph|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment|mindmap|timeline|xychart(?:-beta)?|block(?:-beta)?|packet(?:-beta)?|kanban|architecture(?:-beta)?|sankey(?:-beta)?|radar-beta|treemap(?:-beta)?|flowchart-elk|swimlane-beta|wardley-beta|ishikawa(?:-beta)?|venn-beta|cynefin-beta|railroad(?:-ebnf|-abnf|-peg)?-beta)\b/;
 var FLOW_START = /^(?:graph|flowchart)\s+(?:TB|TD|BT|RL|LR)\b/;
+function lineAt(source, start) {
+  const end = source.indexOf("\n", start);
+  if (end === -1) return { text: source.slice(start), next: source.length };
+  return { text: source.slice(start, end), next: end + 1 };
+}
 function declarationLine(source) {
-  const lines = source.split("\n");
-  let index = 0;
-  if (lines[0]?.trim() === "---") {
-    const close = lines.findIndex((line, at) => at > 0 && line.trim() === "---");
-    if (close > 0) index = close + 1;
+  let start = 0;
+  const first = lineAt(source, 0);
+  if (first.text.trim() === "---") {
+    let at = first.next;
+    while (at < source.length) {
+      const line = lineAt(source, at);
+      if (line.text.trim() === "---") {
+        start = line.next;
+        break;
+      }
+      at = line.next;
+    }
   }
-  for (; index < lines.length; index++) {
-    const line = lines[index].trim();
-    if (line === "" || line.startsWith("%%")) continue;
-    return line;
+  while (start < source.length) {
+    const line = lineAt(source, start);
+    const text = line.text.trim();
+    if (text !== "" && !text.startsWith("%%")) return text;
+    start = line.next;
   }
   return "";
 }
@@ -87,6 +100,24 @@ function createRenderQueue() {
   };
 }
 
+// src/scan-scope.mjs
+function scanWorthy(records, scroll) {
+  if (scroll === null) return true;
+  for (const record of records) {
+    if (scroll.contains(record.target)) return true;
+    if (listContainsScroll(record.addedNodes, scroll)) return true;
+    if (listContainsScroll(record.removedNodes, scroll)) return true;
+  }
+  return false;
+}
+function listContainsScroll(nodes, scroll) {
+  for (const node of nodes) {
+    if (node === scroll) return true;
+    if (typeof node.contains === "function" && node.contains(scroll)) return true;
+  }
+  return false;
+}
+
 // src/viewport.mjs
 var MIN_SCALE = 0.2;
 var MAX_SCALE = 12;
@@ -123,6 +154,7 @@ var SCROLL_SELECTOR = "[data-conversation-scroll]";
 var CARD_SELECTOR = ".md-code-block";
 var CONTENT_SELECTOR = "[data-code-block-content]";
 var OWNER_SELECTOR = "[data-chat-node-key]";
+var PANE_SELECTOR = ".dsh-mermaid-pane";
 var SCAN_DELAY = 240;
 var en = {
   title: "Mermaid",
@@ -324,7 +356,8 @@ function useDiagramSources(active) {
       const next = collectSources();
       setState((prev) => sameScan(prev, next) ? prev : next);
     };
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver((records) => {
+      if (!scanWorthy(records, document.querySelector(SCROLL_SELECTOR))) return;
       window.clearTimeout(timer);
       timer = window.setTimeout(scan, SCAN_DELAY);
     });
@@ -337,15 +370,31 @@ function useDiagramSources(active) {
   }, [active]);
   return state;
 }
-function subscribeDark(onChange) {
-  const observer = new MutationObserver(onChange);
-  observer.observe(document.body, { attributes: true, attributeFilter: [DARK_ATTRIBUTE] });
-  return () => {
-    observer.disconnect();
-  };
-}
-function isDark() {
+var darkCurrent;
+var darkListeners = /* @__PURE__ */ new Set();
+var darkObserver;
+function currentDark() {
   return document.body.hasAttribute(DARK_ATTRIBUTE);
+}
+function subscribeDark(onChange) {
+  darkListeners.add(onChange);
+  if (darkObserver === void 0) {
+    darkCurrent = currentDark();
+    darkObserver = new MutationObserver(() => {
+      const next = currentDark();
+      if (next === darkCurrent) return;
+      darkCurrent = next;
+      for (const listener of darkListeners) listener();
+    });
+    darkObserver.observe(document.body, { attributes: true, attributeFilter: [DARK_ATTRIBUTE] });
+  }
+  return () => {
+    darkListeners.delete(onChange);
+    if (darkListeners.size === 0 && darkObserver !== void 0) {
+      darkObserver.disconnect();
+      darkObserver = void 0;
+    }
+  };
 }
 var renderSequence = 0;
 var enqueueRender = createRenderQueue();
@@ -443,6 +492,7 @@ function DiagramViewer({ svg, t, onClose }) {
   const stageRef = (0, import_react.useRef)(null);
   const canvasRef = (0, import_react.useRef)(null);
   const closeRef = (0, import_react.useRef)(null);
+  const restoreRef = (0, import_react.useRef)(null);
   const fitted = (0, import_react.useRef)(1);
   const userAdjusted = (0, import_react.useRef)(false);
   const [view, setView] = (0, import_react.useState)({ scale: 1, x: 0, y: 0 });
@@ -491,13 +541,33 @@ function DiagramViewer({ svg, t, onClose }) {
       observer.disconnect();
     };
   }, [fit]);
-  useWheelZoom(rootRef, zoomAt);
+  (0, import_react.useEffect)(() => {
+    restoreRef.current = document.activeElement;
+    const root = rootRef.current;
+    if (root === null) return void 0;
+    const isolated = [];
+    for (const child of document.body.children) {
+      if (child === root || child.tagName === "SCRIPT" || child.tagName === "STYLE" || child.hasAttribute("inert")) continue;
+      child.setAttribute("inert", "");
+      isolated.push(child);
+    }
+    const page = document.documentElement;
+    const bodyOverflow = document.body.style.overflow;
+    const pageOverflow = page.style.overflow;
+    document.body.style.overflow = "hidden";
+    page.style.overflow = "hidden";
+    return () => {
+      for (const child of isolated) child.removeAttribute("inert");
+      document.body.style.overflow = bodyOverflow;
+      page.style.overflow = pageOverflow;
+    };
+  }, []);
+  useWheelZoom(stageRef, zoomAt);
   const { dragging, handlers } = useDragPan((dx, dy) => {
     userAdjusted.current = true;
     setView((current) => ({ scale: current.scale, x: current.x + dx, y: current.y + dy }));
   });
   (0, import_react.useEffect)(() => {
-    const previous = document.activeElement;
     closeRef.current?.focus();
     const onKeyDown = (event) => {
       if (event.key === "Escape") {
@@ -531,7 +601,7 @@ function DiagramViewer({ svg, t, onClose }) {
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      previous?.focus?.();
+      restoreRef.current?.focus?.();
     };
   }, [fit, onClose, zoomFromCenter]);
   return (0, import_react_dom.createPortal)(
@@ -588,14 +658,38 @@ function DiagramPreview({ svg, t, onOpen }) {
     }
   );
 }
+function useNearView(ref) {
+  const [near, setNear] = (0, import_react.useState)(false);
+  (0, import_react.useEffect)(() => {
+    const element = ref.current;
+    if (element === null) return void 0;
+    if (typeof IntersectionObserver !== "function") {
+      setNear(true);
+      return void 0;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      setNear(true);
+      observer.disconnect();
+    }, { root: element.closest(PANE_SELECTOR), rootMargin: "100% 0px" });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [ref]);
+  return near;
+}
 function DiagramCard({ source, loadMermaid, t }) {
-  const dark = (0, import_react.useSyncExternalStore)(subscribeDark, isDark, isDark);
+  const dark = (0, import_react.useSyncExternalStore)(subscribeDark, currentDark, currentDark);
+  const cardRef = (0, import_react.useRef)(null);
+  const near = useNearView(cardRef);
   const [drawn, setDrawn] = (0, import_react.useState)(void 0);
   const [failed, setFailed] = (0, import_react.useState)(false);
   const [showSource, setShowSource] = (0, import_react.useState)(false);
   const [copied, setCopied] = (0, import_react.useState)(false);
   const [expanded, setExpanded] = (0, import_react.useState)(false);
   (0, import_react.useEffect)(() => {
+    if (!near) return void 0;
     let cancelled = false;
     void (async () => {
       try {
@@ -613,7 +707,7 @@ function DiagramCard({ source, loadMermaid, t }) {
     return () => {
       cancelled = true;
     };
-  }, [dark, source, loadMermaid]);
+  }, [dark, near, source, loadMermaid]);
   const onCopy = (0, import_react.useCallback)(() => {
     void copyText(source).then((ok) => {
       if (!ok) return;
@@ -625,7 +719,7 @@ function DiagramCard({ source, loadMermaid, t }) {
   }, [source]);
   const text = source.endsWith("\n") ? source.slice(0, -1) : source;
   const showDiagram = drawn !== void 0 && !showSource;
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-mermaid-card", "data-mermaid-card": "", children: [
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-mermaid-card", "data-mermaid-card": "", ref: cardRef, children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-mermaid-card-head", children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-mermaid-label", children: t("title") }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-mermaid-actions", children: [

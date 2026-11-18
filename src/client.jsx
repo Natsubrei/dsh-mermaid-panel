@@ -21,6 +21,7 @@ import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore }
 import { createPortal } from 'react-dom'
 import { assignKeys, isDiagramSource, sameScan } from './diagram-source.mjs'
 import { createRenderQueue, keptDiagram } from './render-policy.mjs'
+import { scanWorthy } from './scan-scope.mjs'
 import { MAX_SCALE, MIN_SCALE, VIEWER_BOTTOM, VIEWER_TOP, fitScale, wheelFactor, zoomAround } from './viewport.mjs'
 
 const TAB_ID = 'dsh-mermaid/mermaid'
@@ -33,6 +34,7 @@ const SCROLL_SELECTOR = '[data-conversation-scroll]'
 const CARD_SELECTOR = '.md-code-block'
 const CONTENT_SELECTOR = '[data-code-block-content]'
 const OWNER_SELECTOR = '[data-chat-node-key]'
+const PANE_SELECTOR = '.dsh-mermaid-pane'
 
 /** Scan debounce: long enough to fold one streaming frame into a single pass. */
 const SCAN_DELAY = 240
@@ -256,7 +258,8 @@ function useDiagramSources(active) {
       const next = collectSources()
       setState(prev => (sameScan(prev, next) ? prev : next))
     }
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver((records) => {
+      if (!scanWorthy(records, document.querySelector(SCROLL_SELECTOR))) return
       window.clearTimeout(timer)
       timer = window.setTimeout(scan, SCAN_DELAY)
     })
@@ -270,14 +273,33 @@ function useDiagramSources(active) {
   return state
 }
 
-function subscribeDark(onChange) {
-  const observer = new MutationObserver(onChange)
-  observer.observe(document.body, { attributes: true, attributeFilter: [DARK_ATTRIBUTE] })
-  return () => { observer.disconnect() }
+let darkCurrent
+const darkListeners = new Set()
+let darkObserver
+
+function currentDark() {
+  return document.body.hasAttribute(DARK_ATTRIBUTE)
 }
 
-function isDark() {
-  return document.body.hasAttribute(DARK_ATTRIBUTE)
+function subscribeDark(onChange) {
+  darkListeners.add(onChange)
+  if (darkObserver === undefined) {
+    darkCurrent = currentDark()
+    darkObserver = new MutationObserver(() => {
+      const next = currentDark()
+      if (next === darkCurrent) return
+      darkCurrent = next
+      for (const listener of darkListeners) listener()
+    })
+    darkObserver.observe(document.body, { attributes: true, attributeFilter: [DARK_ATTRIBUTE] })
+  }
+  return () => {
+    darkListeners.delete(onChange)
+    if (darkListeners.size === 0 && darkObserver !== undefined) {
+      darkObserver.disconnect()
+      darkObserver = undefined
+    }
+  }
 }
 
 let renderSequence = 0
@@ -416,7 +438,8 @@ function naturalSize(svg) {
  * drag to pan, and the keyboard's own ways out. The stage is a portal on
  * `document.body` so the pane's scroll container cannot clip it, and the
  * transform is applied to a wrapper whose origin is the diagram's top-left
- * corner, which keeps pointer-anchored zoom to one multiplication.
+ * corner, which keeps pointer-anchored zoom to one multiplication. The page
+ * behind the dialog is inert and cannot scroll while it is open.
  * @param props - the rendered SVG markup, localized copy, and the close handler.
  * @returns the overlay.
  */
@@ -425,6 +448,7 @@ function DiagramViewer({ svg, t, onClose }) {
   const stageRef = useRef(null)
   const canvasRef = useRef(null)
   const closeRef = useRef(null)
+  const restoreRef = useRef(null)
   const fitted = useRef(1)
   const userAdjusted = useRef(false)
   const [view, setView] = useState({ scale: 1, x: 0, y: 0 })
@@ -477,7 +501,29 @@ function DiagramViewer({ svg, t, onClose }) {
     return () => { observer.disconnect() }
   }, [fit])
 
-  useWheelZoom(rootRef, zoomAt)
+  useEffect(() => {
+    restoreRef.current = document.activeElement
+    const root = rootRef.current
+    if (root === null) return undefined
+    const isolated = []
+    for (const child of document.body.children) {
+      if (child === root || child.tagName === 'SCRIPT' || child.tagName === 'STYLE' || child.hasAttribute('inert')) continue
+      child.setAttribute('inert', '')
+      isolated.push(child)
+    }
+    const page = document.documentElement
+    const bodyOverflow = document.body.style.overflow
+    const pageOverflow = page.style.overflow
+    document.body.style.overflow = 'hidden'
+    page.style.overflow = 'hidden'
+    return () => {
+      for (const child of isolated) child.removeAttribute('inert')
+      document.body.style.overflow = bodyOverflow
+      page.style.overflow = pageOverflow
+    }
+  }, [])
+
+  useWheelZoom(stageRef, zoomAt)
 
   const { dragging, handlers } = useDragPan((dx, dy) => {
     userAdjusted.current = true
@@ -485,7 +531,6 @@ function DiagramViewer({ svg, t, onClose }) {
   })
 
   useEffect(() => {
-    const previous = document.activeElement
     closeRef.current?.focus()
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
@@ -519,7 +564,7 @@ function DiagramViewer({ svg, t, onClose }) {
     document.addEventListener('keydown', onKeyDown)
     return () => {
       document.removeEventListener('keydown', onKeyDown)
-      previous?.focus?.()
+      restoreRef.current?.focus?.()
     }
   }, [fit, onClose, zoomFromCenter])
 
@@ -575,6 +620,34 @@ function DiagramPreview({ svg, t, onOpen }) {
 }
 
 /**
+ * Whether a card has approached the pane's viewport. The page renders the
+ * diagrams it can show and leaves the rest as the source it already displays,
+ * so opening a long conversation does not queue every render at once; a card
+ * that was once near stays rendered.
+ * @param ref - the card element.
+ * @returns whether the card is within one pane-height of the visible area.
+ */
+function useNearView(ref) {
+  const [near, setNear] = useState(false)
+  useEffect(() => {
+    const element = ref.current
+    if (element === null) return undefined
+    if (typeof IntersectionObserver !== 'function') {
+      setNear(true)
+      return undefined
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some(entry => entry.isIntersecting)) return
+      setNear(true)
+      observer.disconnect()
+    }, { root: element.closest(PANE_SELECTOR), rootMargin: '100% 0px' })
+    observer.observe(element)
+    return () => { observer.disconnect() }
+  }, [ref])
+  return near
+}
+
+/**
  * One diagram card: the rendered SVG, its authored source on demand, and copy.
  * A source that fails to parse keeps the last diagram on screen only while it
  * is a strict prefix of the new source, which is what streaming looks like;
@@ -583,7 +656,9 @@ function DiagramPreview({ svg, t, onOpen }) {
  * @returns the card.
  */
 function DiagramCard({ source, loadMermaid, t }) {
-  const dark = useSyncExternalStore(subscribeDark, isDark, isDark)
+  const dark = useSyncExternalStore(subscribeDark, currentDark, currentDark)
+  const cardRef = useRef(null)
+  const near = useNearView(cardRef)
   const [drawn, setDrawn] = useState(undefined)
   const [failed, setFailed] = useState(false)
   const [showSource, setShowSource] = useState(false)
@@ -591,6 +666,7 @@ function DiagramCard({ source, loadMermaid, t }) {
   const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
+    if (!near) return undefined
     let cancelled = false
     void (async () => {
       try {
@@ -608,7 +684,7 @@ function DiagramCard({ source, loadMermaid, t }) {
       }
     })()
     return () => { cancelled = true }
-  }, [dark, source, loadMermaid])
+  }, [dark, near, source, loadMermaid])
 
   const onCopy = useCallback(() => {
     void copyText(source).then((ok) => {
@@ -621,7 +697,7 @@ function DiagramCard({ source, loadMermaid, t }) {
   const text = source.endsWith('\n') ? source.slice(0, -1) : source
   const showDiagram = drawn !== undefined && !showSource
   return (
-    <div className="dsh-mermaid-card" data-mermaid-card="">
+    <div className="dsh-mermaid-card" data-mermaid-card="" ref={cardRef}>
       <div className="dsh-mermaid-card-head">
         <span className="dsh-mermaid-label">{t('title')}</span>
         <div className="dsh-mermaid-actions">

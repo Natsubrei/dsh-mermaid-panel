@@ -13,7 +13,8 @@ inside the messages instead; both install together.
 - `src/client.jsx` — the page: DOM scan, cards, and the full-screen viewer.
   The source. `client.js` is its build output, never the place to edit.
 - `src/diagram-source.mjs` — which sources are diagrams, their keys, and whether
-  a scan changed. `src/viewport.mjs` — fit ratio, wheel factor, and zoom.
+  a scan changed. `src/scan-scope.mjs` — whether a mutation batch can change the
+  sources. `src/viewport.mjs` — fit ratio, wheel factor, and zoom.
   `src/render-policy.mjs` — the streaming keep rule and the render queue.
 - `client.js`, `client.mermaid.js` — artifacts, committed, so a Git install needs
   no build. `client.mermaid.js` is the 3.5 MB engine, requested on first diagram.
@@ -26,8 +27,8 @@ inside the messages instead; both install together.
 ## Change something
 
 1. Edit the module that owns the behavior: `src/client.jsx` for the page,
-   `src/diagram-source.mjs`, `src/viewport.mjs`, or `src/render-policy.mjs`
-   for the rules those tests call.
+   `src/diagram-source.mjs`, `src/scan-scope.mjs`, `src/viewport.mjs`, or
+   `src/render-policy.mjs` for the rules those tests call.
 2. `pnpm run build`, then `grep -m1 '  id: "' client.js`: it must equal the
    `package.json` name, because that name is also the engine chunk's id
    (`dsh-mermaid-panel/client.mermaid.js`) that `require.async` resolves. The
@@ -39,8 +40,8 @@ inside the messages instead; both install together.
    plugins reach the page at load, so a refresh applies them and a host restart
    does not.
 
-`pnpm test` covers the scan, the fit ratio, and the render queue. Step 4 is
-still the test of the page. Mermaid's own parser is the final word, so a
+`pnpm test` covers the scan, the mutation scope, the fit ratio, and the render
+queue. Step 4 is still the test of the page. Mermaid's own parser is the final word, so a
 source that fails renders as the failure notice plus its source.
 
 ## Release
@@ -104,5 +105,9 @@ describe the same code.
 - The page reads the DOM the chat has mounted. When "no diagrams" is reported,
   check the code-card selectors in `src/client.jsx` before any plugin code: chat
   markup changes first, and the page's empty state is the symptom.
-- Mermaid's engine is a classic script. `build.mjs` keeps it out of the module
-  factory, because wrapping it drops the global it installs.
+- Mermaid's engine is a classic script whose last line reads its namespace back
+  off `globalThis`. `build.mjs` points that read at the wrapper's function
+  scope, keeps the engine out of the module factory, and restores the globals
+  this build writes (`mermaid` included), so loading it leaves the page as it
+  found it. A mermaid upgrade that reshapes that footer fails the build
+  loudly; `KEYS` in `build.mjs` is the set to re-check after one.

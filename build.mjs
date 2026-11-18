@@ -47,19 +47,45 @@ await writeFile(new URL('client.js', root), client)
 /**
  * The engine's distribution publishes itself at script top level: its build
  * declares a `var` that only becomes a global in a classic script's global
- * scope, so the source must not be wrapped in the registration factory. It
- * runs first, then the factory hands the global to the module table.
+ * scope, and its last line reads that var back off `globalThis`. The wrapper
+ * below points that read at the function scope instead, keeps the engine for
+ * the registration factory, and restores the globals this build writes
+ * (`mermaid` included), so loading it leaves the page's globals as it found
+ * them. The footer check fails loudly when a mermaid upgrade reshapes that
+ * export line; `KEYS` is the set this engine build writes, so re-check it
+ * after an upgrade.
  */
 const engine = await readFile(require.resolve('mermaid/dist/mermaid.min.js'), 'utf8')
+const ENGINE_EXPORT = 'globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;'
+if (engine.split(ENGINE_EXPORT).length !== 2) {
+  throw new Error('build: the mermaid export line changed; update the wrapper in build.mjs')
+}
+const engineBody = engine.replace(ENGINE_EXPORT, 'engine = __esbuild_esm_mermaid_nm["mermaid"].default')
 const chunk = [
-  engine,
-  '',
-  'window.__ModuleLoader__.load({',
-  `  id: ${JSON.stringify(`${PKG}/client.mermaid.js`)},`,
-  '  factory() {',
-  '    return { default: globalThis.mermaid };',
-  '  },',
-  '});',
+  '(function () {',
+  "  'use strict'",
+  '  var KEYS = ["mermaid", "fastdom", "fastdomPromised", "injected"]',
+  '  var saved = {}, absent = {}',
+  '  for (var i = 0; i < KEYS.length; i++) {',
+  '    if (Object.prototype.hasOwnProperty.call(globalThis, KEYS[i])) saved[KEYS[i]] = globalThis[KEYS[i]]',
+  '    else absent[KEYS[i]] = true',
+  '  }',
+  '  var engine',
+  '  try {',
+  engineBody,
+  '  } finally {',
+  '    for (var j = 0; j < KEYS.length; j++) {',
+  '      if (absent[KEYS[j]]) delete globalThis[KEYS[j]]',
+  '      else globalThis[KEYS[j]] = saved[KEYS[j]]',
+  '    }',
+  '  }',
+  '  window.__ModuleLoader__.load({',
+  `    id: ${JSON.stringify(`${PKG}/client.mermaid.js`)},`,
+  '    factory() {',
+  '      return { default: engine };',
+  '    },',
+  '  });',
+  '}).call(globalThis);',
   '',
 ].join('\n')
 await writeFile(new URL('client.mermaid.js', root), chunk)

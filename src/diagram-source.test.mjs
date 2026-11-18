@@ -31,6 +31,13 @@ test('two diagrams in one owner stay ordered', () => {
   assert.deepEqual(blocks.map(block => block.key), ['m1#0', 'm1#1'])
 })
 
+test('frontmatter, blank lines, and comments do not hide the declaration', () => {
+  assert.equal(isDiagramSource('---\ntitle: x\n---\n\n%% note\n  sequenceDiagram\nA->>B: hi'), true)
+  assert.equal(isDiagramSource('\r\n%% note\r\ngraph LR\r\nA-->B'), true)
+  assert.equal(isDiagramSource('---\ntitle: x\n---\n\n{\n  "a": 1\n}'), false)
+  assert.equal(isDiagramSource('---\nsequenceDiagram'), false)
+})
+
 test('graph and flowchart need a direction; info is not a diagram', () => {
   assert.equal(isDiagramSource('graph\nA-->B'), false)
   assert.equal(isDiagramSource('flowchart\nA-->B'), false)
