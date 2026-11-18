@@ -2,6 +2,12 @@
 
 User-visible changes. Dates are the version commits, in `+0800`.
 
+## 0.1.6 — 2026-11-19
+
+- A long conversation draws its diagrams as you scroll to them. Opening the page no longer renders every diagram at once.
+- Loading the diagram engine leaves no globals behind: `window.mermaid` and the engine's other names are restored after it loads.
+- The full-screen view zooms only over the diagram, and the page behind it cannot be focused or scrolled while it is open.
+
 ## 0.1.5 — 2026-11-04
 
 - An edit that keeps the same source length updates the card. A new diagram earlier in the conversation no longer remounts the later cards.

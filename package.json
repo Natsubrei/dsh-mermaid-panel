@@ -1,6 +1,6 @@
 {
   "name": "dsh-mermaid-panel",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "description": "A DeepSeek Harness plugin that renders a conversation's Mermaid diagrams in the right Sidebar, not inline in the chat.",
   "keywords": [
